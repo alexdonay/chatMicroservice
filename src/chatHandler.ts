@@ -3,9 +3,13 @@ import { Server, Socket } from 'socket.io'
 export class ChatHandler {
   private io: Server
   private socket: Socket
-  private userList: string[]
+  private userList: Map<string | string[] | undefined, string>
 
-  constructor(io: Server, socket: Socket, userList: string[]) {
+  constructor(
+    io: Server,
+    socket: Socket,
+    userList: Map<string | string[] | undefined, string>
+  ) {
     this.io = io
     this.socket = socket
     this.userList = userList
@@ -14,7 +18,10 @@ export class ChatHandler {
   }
 
   private registerEvents() {
-    this.userList.push(this.socket.id)
+    this.userList.set(
+      this.socket.handshake.headers['x-user-id'],
+      this.socket.id
+    )
     this.io.emit('userList', {
       userList: this.userList,
       thisUserId: this.socket.id
@@ -26,18 +33,27 @@ export class ChatHandler {
       const userId = this.socket.handshake.headers['x-user-id']
       console.log(userId)
       if (apiKey === process.env['ACCESS_TOKEN']) {
-        const recipientId = msg.recipientId
-        const message = msg.message
-        if (!this.userList.includes(recipientId)) {
+        const recipientEmail = msg.recipientEmail
+        if (!this.userList.has(recipientEmail)) {
           this.io.to(this.socket.id).emit('message', {
             from: 'server',
-            message: 'Recipient not found' + recipientId
+            message: 'Recipient not found' + recipientEmail
           })
         } else {
-          this.io.to(recipientId).emit('message', {
-            from: this.socket.id,
-            message: message
-          })
+          const recipientEmail = msg.recipientEmail
+          const message = msg.message
+          const recipientId = this.userList.get(recipientEmail)
+          if (!recipientId) {
+            this.io.to(this.socket.id).emit('privateMessage', {
+              from: 'server',
+              message: 'Recipient not found: ' + recipientEmail
+            })
+          } else {
+            this.io.to(recipientId).emit('privateMessage', {
+              from: this.socket.id,
+              message: message
+            })
+          }
         }
       } else {
         console.log('Invalid token, disconnecting user')
@@ -46,9 +62,9 @@ export class ChatHandler {
     })
 
     this.socket.on('disconnect', () => {
-      const index = this.userList.indexOf(this.socket.id)
+      const index = Array.from(this.userList.values()).indexOf(this.socket.id)
       if (index !== -1) {
-        this.userList.splice(index, 1)
+        this.userList.delete(Array.from(this.userList.keys())[index])
       }
       console.log(`User ${this.socket.id} disconnected`)
       this.io.emit('userList', { userList: this.userList })

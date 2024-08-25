@@ -4,7 +4,7 @@ import { SocketService } from './infra/socket/socket.service'
 
 class App {
   private io: Server
-  private userList: string[] = []
+  private userList: Map<string | string[] | undefined, string> = new Map()
   httpService: HttpService = new HttpService()
 
   constructor() {
