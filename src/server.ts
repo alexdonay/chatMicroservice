@@ -1,18 +1,13 @@
-import { Server } from 'socket.io'
 import { HttpService } from './infra/http/http.service'
 import { SocketService } from './infra/socket/socket.service'
 
 class App {
-  private io: Server
-  private userList: Map<string | string[] | undefined, string> = new Map()
   httpService: HttpService = new HttpService()
 
   constructor() {
-    this.io = new Server(this.httpService.http)
-    new SocketService(this.io, this.userList)
+    new SocketService(this.httpService)
   }
 }
-
 const app = new App()
 app.httpService.listen(3000, () => {
   console.log('Server running on port 3000')

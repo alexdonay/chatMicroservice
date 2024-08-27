@@ -1,43 +1,46 @@
 import { Server, Socket } from 'socket.io'
 import { ChatHandler } from '../../chatHandler'
-import { DbMongoService } from '../database/mongo.service'
-
-function validateToken(token?: string): boolean {
-  return token === process.env.ACCESS_TOKEN
-}
+import { authService } from '../auth/auth.service'
+import { HttpService } from '../http/http.service'
 
 export class SocketService {
-  private io: Server
-  private userList: Map<string | string[] | undefined, string>
-  private dbservice: DbMongoService
-  constructor(
-    io: Server,
-    userList: Map<string | string[] | undefined, string>
-  ) {
-    this.io = io
-    this.userList = userList
+  private readonly httpService: HttpService
+  private readonly io: Server
+  private readonly connectedUsers: Map<string, string> = new Map()
+
+  constructor(httpService: HttpService) {
+    this.httpService = httpService
+    this.io = new Server(this.httpService.http)
     this.listenSocket()
-    this.dbservice = DbMongoService.getInstance()
   }
 
   private async listenSocket() {
     this.io.use(async (socket, next) => {
-      const token = socket.handshake.headers['x-api-key']?.toString()
-      const userEmail = socket.handshake.headers['x-user-email']?.toString()
-      const userEmailBd = await this.dbservice
-        .getUserModel()
-        .countDocuments({ email: userEmail })
-      if (userEmailBd > 0) {
-        return next()
+      try {
+        const userEmail = socket.handshake.headers['x-user-email'] as string
+        const apiKey = socket.handshake.headers['x-api-key'] as string
+        const isAuthenticated = await authService(userEmail, apiKey)
+        if (isAuthenticated) {
+          return next()
+        } else {
+          console.log('Autenticação falhou para o email:', userEmail)
+          return socket.disconnect(true)
+        }
+      } catch (error) {
+        console.error('Erro durante a autenticação:', error)
+        return socket.disconnect(true)
       }
-      console.log('Invalid token, disconnecting user')
-      socket.disconnect(true)
     })
 
     this.io.on('connection', (socket: Socket) => {
-      const userEmail = socket.handshake.headers['x-user-email']?.toString()
-      this.userList.set(userEmail, socket.id)
-      new ChatHandler(this.io, socket, this.userList)
+      const userEmail = socket.handshake.headers['x-user-email'] as string
+      this.connectedUsers.set(userEmail, socket.id)
+      new ChatHandler(this.io, socket, this.connectedUsers)
+      this.io.emit('userList', Array.from(this.connectedUsers.keys()))
+      socket.on('disconnect', () => {
+        this.connectedUsers.delete(userEmail)
+        this.io.emit('userList', Array.from(this.connectedUsers.keys()))
+      })
     })
   }
 }

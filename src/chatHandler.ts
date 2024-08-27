@@ -1,73 +1,69 @@
-import 'dotenv/config'
 import { Server, Socket } from 'socket.io'
+import { MessageModel } from './infra/database/models/message.model'
+
 export class ChatHandler {
   private io: Server
   private socket: Socket
-  private userList: Map<string | string[] | undefined, string>
+  private connectedUsers: Map<string, string>
 
-  constructor(
-    io: Server,
-    socket: Socket,
-    userList: Map<string | string[] | undefined, string>
-  ) {
+  constructor(io: Server, socket: Socket, connectedUsers: Map<string, string>) {
     this.io = io
     this.socket = socket
-    this.userList = userList
-
+    this.connectedUsers = connectedUsers
     this.registerEvents()
   }
 
   private registerEvents() {
-    this.userList.set(
-      this.socket.handshake.headers['x-user-id'],
-      this.socket.id
-    )
-    this.io.emit('userList', {
-      userList: this.userList,
-      thisUserId: this.socket.id
-    })
+    this.socket.on('privateMessage', async (msg) => {
+      try {
+        // Parse the message
+        const parsedMsg = JSON.parse(msg)
+        const recipientEmail = parsedMsg.recipientEmail
+        const message = parsedMsg.message
 
-    this.socket.on('privateMessage', (msg) => {
-      msg = JSON.parse(msg)
-      const apiKey = this.socket.handshake.headers['x-api-key']
-      const userId = this.socket.handshake.headers['x-user-id']
-      console.log(userId)
-      if (apiKey === process.env['ACCESS_TOKEN']) {
-        const recipientEmail = msg.recipientEmail
-        if (!this.userList.has(recipientEmail)) {
+        // Get the sender's info from the handshake headers
+        const userEmail = this.socket.handshake.headers[
+          'x-user-email'
+        ] as string
+
+        if (!userEmail) {
+          throw new Error(
+            'User ID is missing from the socket handshake headers.'
+          )
+        }
+        const recipientSocketId = this.connectedUsers.get(recipientEmail)
+        if (recipientSocketId) {
+          this.io.to(recipientSocketId).emit('privateMessage', {
+            from: userEmail,
+            message: message
+          })
+
+          const newMessage = new MessageModel({
+            sender: userEmail,
+            recipient: recipientEmail,
+            message: message,
+            timestamp: new Date()
+          })
+
+          await newMessage.save()
+          console.log('Message saved to database:', newMessage)
+        } else {
           this.io.to(this.socket.id).emit('message', {
             from: 'server',
-            message: 'Recipient not found' + recipientEmail
+            message: `User with email ${recipientEmail} is not connected.`
           })
-        } else {
-          const recipientEmail = msg.recipientEmail
-          const message = msg.message
-          const recipientId = this.userList.get(recipientEmail)
-          if (!recipientId) {
-            this.io.to(this.socket.id).emit('privateMessage', {
-              from: 'server',
-              message: 'Recipient not found: ' + recipientEmail
-            })
-          } else {
-            this.io.to(recipientId).emit('privateMessage', {
-              from: this.socket.id,
-              message: message
-            })
-          }
         }
-      } else {
-        console.log('Invalid token, disconnecting user')
-        this.socket.disconnect(true)
+      } catch (error) {
+        console.error('Error processing privateMessage:', error)
+        this.io.to(this.socket.id).emit('message', {
+          from: 'server',
+          message: 'Error processing your message'
+        })
       }
     })
 
     this.socket.on('disconnect', () => {
-      const index = Array.from(this.userList.values()).indexOf(this.socket.id)
-      if (index !== -1) {
-        this.userList.delete(Array.from(this.userList.keys())[index])
-      }
-      console.log(`User ${this.socket.id} disconnected`)
-      this.io.emit('userList', { userList: this.userList })
+      console.log(`Usuário ${this.socket.id} desconectou`)
     })
   }
 }
